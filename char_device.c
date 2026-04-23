@@ -5,6 +5,8 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/uaccess.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
 
 #define BUFFER_SIZE 1024
 
@@ -56,7 +58,14 @@ static ssize_t char_write(struct file *file, const char __user *buf, size_t coun
 
     size_t bytes_to_write;
 
+    if  (count > BUFFER_SIZE) {
+        printk(KERN_WARNING "char device: input too large, truncating from %zu to %d bytes\n",
+               count, BUFFER_SIZE);
+    }
+
     bytes_to_write = min(count, (size_t)BUFFER_SIZE);
+
+    memset(device_buffer, 0, BUFFER_SIZE);
 
     if (copy_from_user(device_buffer, buf, bytes_to_write)) {
         printk(KERN_ERR "char_device: failed to copy data from user\n");
@@ -64,6 +73,7 @@ static ssize_t char_write(struct file *file, const char __user *buf, size_t coun
     }
 
     buffer_size = bytes_to_write;
+    *offset = 0;
 
     printk(KERN_INFO "char_device: wrote %zu bytes\n", bytes_to_write);
 
