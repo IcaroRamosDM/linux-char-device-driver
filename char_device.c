@@ -4,6 +4,9 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/uaccess.h>
+
+#define BUFFER_SIZE 1024
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Icaro Ramos");
@@ -13,6 +16,9 @@ static dev_t dev_num;
 static struct cdev char_cdev;
 static struct class *char_class;
 static struct device *char_device;
+
+static char device_buffer[BUFFER_SIZE];
+static size_t buffer_size = 0;
 
 static int char_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "char_device: device opened\n");
@@ -24,10 +30,52 @@ static int char_release(struct inode *inode, struct file *file) {
     return 0;
 }
 
+static ssize_t char_read(struct file *file, char __user *buf, size_t count, loff_t *offset) {
+    
+    size_t bytes_to_read;
+
+    if (*offset >= buffer_size) {
+        return 0;
+    }
+
+    bytes_to_read = min(count, buffer_size - (size_t)*offset);
+
+    if (copy_to_user(buf, device_buffer + *offset, bytes_to_read)) {
+        printk(KERN_ERR "char_device: failed to copy data to user\n");
+        return -EFAULT;
+    }
+
+    *offset += bytes_to_read;
+
+    printk(KERN_INFO "char_device: read %zu bytes\n", bytes_to_read);
+
+    return bytes_to_read;
+}
+
+static ssize_t char_write(struct file *file, const char __user *buf, size_t count, loff_t *offset) {
+
+    size_t bytes_to_write;
+
+    bytes_to_write = min(count, (size_t)BUFFER_SIZE);
+
+    if (copy_from_user(device_buffer, buf, bytes_to_write)) {
+        printk(KERN_ERR "char_device: failed to copy data from user\n");
+        return -EFAULT;
+    }
+
+    buffer_size = bytes_to_write;
+
+    printk(KERN_INFO "char_device: wrote %zu bytes\n", bytes_to_write);
+
+    return bytes_to_write;
+}
+
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = char_open,
     .release = char_release,
+    .read = char_read,
+    .write = char_write,
 };
 
 static int __init char_device_init(void) {
