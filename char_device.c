@@ -57,23 +57,36 @@ static ssize_t char_read(struct file *file, char __user *buf, size_t count, loff
 static ssize_t char_write(struct file *file, const char __user *buf, size_t count, loff_t *offset) {
 
     size_t bytes_to_write;
+    size_t space_left;
 
-    if  (count > BUFFER_SIZE) {
-        printk(KERN_WARNING "char device: input too large, truncating from %zu to %d bytes\n",
-               count, BUFFER_SIZE);
+    if (*offset == 0) {
+        memset(device_buffer, 0, BUFFER_SIZE);
+        buffer_size = 0;
     }
 
-    bytes_to_write = min(count, (size_t)BUFFER_SIZE);
+    if (*offset >= BUFFER_SIZE) {
+        printk(KERN_WARNING "char_device: no space left in buffer\n");
+        return -ENOSPC;
+    }
 
-    memset(device_buffer, 0, BUFFER_SIZE);
+    space_left = BUFFER_SIZE - (size_t)*offset;
 
-    if (copy_from_user(device_buffer, buf, bytes_to_write)) {
+    if  (count > space_left) {
+        printk(KERN_WARNING "char device: input too large, truncating from %zu to %zu bytes\n",
+               count, space_left);
+    }
+
+    bytes_to_write = min(count, space_left);
+
+    if (copy_from_user(device_buffer + *offset, buf, bytes_to_write)) {
         printk(KERN_ERR "char_device: failed to copy data from user\n");
         return -EFAULT;
     }
 
-    buffer_size = bytes_to_write;
-    *offset = 0;
+    *offset += bytes_to_write;
+
+    if (buffer_size < (size_t)*offset)
+        buffer_size = (size_t)*offset;
 
     printk(KERN_INFO "char_device: wrote %zu bytes\n", bytes_to_write);
 
