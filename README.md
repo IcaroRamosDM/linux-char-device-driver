@@ -187,7 +187,17 @@ Example:
 
 ---
 
+## License
+
+MIT
+
+---
+
 ## Author
 
-Ícaro Ramos
+Icaro Ramos Rodrigues dos Santos
+Embedded Systems | Firmware | Arm | STM32 | C | Verilog | UVM | Design Verification
+
+GitHub: https://github.com/IcaroRamosDM
+LinkedIn: https://ww.linkedin.com/in/icaro-ramos-r/
 icaroelt@gmail.com
