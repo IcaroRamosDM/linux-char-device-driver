@@ -11,3 +11,5 @@ modules.order
 .*.cmd
 .cmd
 
+
+__pycache__/

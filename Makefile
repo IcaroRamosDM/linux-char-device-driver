@@ -1,7 +1,15 @@
 obj-m += char_device.o
 
+KDIR ?= /lib/modules/$(shell uname -r)/build
+PYTHON ?= python3
+
+.PHONY: all clean test
+
 all:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" W=1 modules
 
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" clean
+
+test:
+	$(PYTHON) tests/check_device.py

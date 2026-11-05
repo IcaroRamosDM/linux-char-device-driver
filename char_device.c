@@ -7,6 +7,8 @@
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
 
 #define BUFFER_SIZE 1024
 
@@ -14,13 +16,13 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Icaro Ramos");
 MODULE_DESCRIPTION("Simple Character Device Driver");
 
-/* Device number containing the dinamically allocated major and minor numbers */
+/* Device number allocated when the module is loaded. */
 static dev_t dev_num;
 
 /* Kernel representation of this character device */
 static struct cdev char_cdev;
 
-/* Device class and device object use to create /dev/char_device automatically */
+/* Objects used by udev to expose /dev/char_device. */
 static struct class *char_class;
 static struct device *char_device;
 
@@ -28,96 +30,74 @@ static struct device *char_device;
 static char device_buffer[BUFFER_SIZE];
 
 /* Number of valid bytes currently stored in device_buffer */
-static size_t buffer_size = 0;
+static size_t buffer_size;
+static DEFINE_MUTEX(device_mutex);
 
 static int char_open(struct inode *inode, struct file *file) {
-    printk(KERN_INFO "char_device: device opened\n");
-    return 0;
+    return nonseekable_open(inode, file);
 }
 
-static int char_release(struct inode *inode, struct file *file) {
-    printk(KERN_INFO "char_device: device closed\n");
-    return 0;
-}
+static ssize_t char_read(struct file *file, char __user *buffer, size_t count, loff_t *offset) {
+    ssize_t result;
 
-static ssize_t char_read(struct file *file, char __user *buf, size_t count, loff_t *offset) {
-    
-    size_t bytes_to_read;
-
-    /* Return EOF when the current file offset reaches the stored data size */
-    if (*offset >= buffer_size) {
-        return 0;
+    (void)file;
+    if (mutex_lock_interruptible(&device_mutex)) {
+        return -ERESTARTSYS;
     }
-
-    /* Read only the amount requessted by user space or the remaining data available */
-    bytes_to_read = min(count, buffer_size - (size_t)*offset);
-
-    /* Copy data safely from kernel to user space */
-    if (copy_to_user(buf, device_buffer + *offset, bytes_to_read)) {
-        printk(KERN_ERR "char_device: failed to copy data to user\n");
-        return -EFAULT;
-    }
-
-    /* Advance the file offset by the number of bytes successfully read */
-    *offset += bytes_to_read;
-
-    printk(KERN_INFO "char_device: read %zu bytes\n", bytes_to_read);
-
-    return bytes_to_read;
+    result = simple_read_from_buffer(buffer, count, offset, device_buffer, buffer_size);
+    mutex_unlock(&device_mutex);
+    return result;
 }
 
-static ssize_t char_write(struct file *file, const char __user *buf, size_t count, loff_t *offset) {
-
+static ssize_t char_write(struct file *file, const char __user *buffer, size_t count,
+                          loff_t *offset) {
+    ssize_t result;
     size_t bytes_to_write;
-    size_t space_left;
+    void *incoming;
 
-    /* A new write sequence starts at offset 0.
-       Clear the previous content so the device stores only the latest write */
+    (void)file;
+    if (mutex_lock_interruptible(&device_mutex)) {
+        return -ERESTARTSYS;
+    }
+    if (*offset < 0) {
+        result = -EINVAL;
+        goto unlock;
+    }
+    if (count == 0) {
+        result = 0;
+        goto unlock;
+    }
+    if (*offset >= BUFFER_SIZE) {
+        result = -ENOSPC;
+        goto unlock;
+    }
+    bytes_to_write = min(count, BUFFER_SIZE - (size_t)*offset);
+
+    /* A failed user copy must leave the previous message intact. */
+    incoming = memdup_user(buffer, bytes_to_write);
+    if (IS_ERR(incoming)) {
+        result = PTR_ERR(incoming);
+        goto unlock;
+    }
     if (*offset == 0) {
-        memset(device_buffer, 0, BUFFER_SIZE);
+        memset(device_buffer, 0, sizeof device_buffer);
         buffer_size = 0;
     }
-
-    /* Reject writes when the file offset has already reached the buffer limit */
-    if (*offset >= BUFFER_SIZE) {
-        printk(KERN_WARNING "char_device: no space left in buffer\n");
-        return -ENOSPC;
-    }
-
-    /* Calculate how much space remains in the fixed-size buffer */
-    space_left = BUFFER_SIZE - (size_t)*offset;
-
-    /* If the user space send more data than available space, only part of it is stored */
-    if  (count > space_left) {
-        printk(KERN_WARNING "char device: input too large, truncating from %zu to %zu bytes\n",
-               count, space_left);
-    }
-
-    bytes_to_write = min(count, space_left);
-
-    /* Copy data safely from user space into the kernel buffer */
-    if (copy_from_user(device_buffer + *offset, buf, bytes_to_write)) {
-        printk(KERN_ERR "char_device: failed to copy data from user\n");
-        return -EFAULT;
-    }
-
-    /* Advance the file offset by the number of bytes successfully written */
+    memcpy(device_buffer + (size_t)*offset, incoming, bytes_to_write);
+    kfree(incoming);
     *offset += bytes_to_write;
+    buffer_size = max(buffer_size, (size_t)*offset);
+    result = (ssize_t)bytes_to_write;
 
-    /* Track the amount of valid data stored in the buffer */
-    if (buffer_size < (size_t)*offset)
-        buffer_size = (size_t)*offset;
-
-    printk(KERN_INFO "char_device: wrote %zu bytes\n", bytes_to_write);
-
-    return bytes_to_write;
+unlock:
+    mutex_unlock(&device_mutex);
+    return result;
 }
 
 /* File operations exposed by this character device */
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = char_open,
-    .release = char_release,
     .read = char_read,
     .write = char_write,
 };
@@ -165,15 +145,15 @@ static int __init char_device_init(void) {
     }
 
     printk(KERN_INFO "char_device: module loaded\n");
-    printk(KERN_INFO "char_device: registered with major %d and minor %d\n",
-           MAJOR(dev_num), MINOR(dev_num));
+    printk(KERN_INFO "char_device: registered with major %d and minor %d\n", MAJOR(dev_num),
+           MINOR(dev_num));
     printk(KERN_INFO "char_device: device created at /dev/char_device\n");
-    
+
     return 0;
 }
 
 static void __exit char_device_exit(void) {
-    
+
     /* Destroy resources in the reverse order of initialization */
     device_destroy(char_class, dev_num);
     class_destroy(char_class);

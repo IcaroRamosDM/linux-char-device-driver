@@ -1,193 +1,71 @@
 # Linux Character Device Driver
 
-A simple Linux Kernel Module implementing a character device driver.
+[![Checks](https://github.com/IcaroRamosDM/linux-char-device-driver/actions/workflows/checks.yml/badge.svg)](https://github.com/IcaroRamosDM/linux-char-device-driver/actions/workflows/checks.yml)
 
-## Overview
+An educational Linux kernel module exposing a synchronized 1024-byte message
+buffer at /dev/char_device.
 
-This project implements a basic character device driver that allows user-space applications to write data to the kernel and read it back.
+## Behavior
 
-The driver:
-- Registers a character device
-- Creates a device node automatically in `/dev`
-- Supports `open`, `read`, `write`, and `release` operations
-- Stores data in a fixed-size internal buffer
+Reads respect the requested byte count and file offset and return EOF after
+the stored message. Each write sequence beginning at offset zero replaces the
+previous message. Larger input is written only up to the remaining capacity;
+a further nonempty write returns ENOSPC. A zero-length write preserves the message.
+A failed copy from user space preserves the previous data.
 
----
+A mutex protects the buffer and size. Individual read/write operations are
+serialized; multiple partial reads can still observe another writer's later
+message between calls. The device is nonseekable and does not provide ioctl,
+poll, per-client messages or multiple device instances.
 
-## Features
+## Build
 
-- Dynamic allocation of major/minor numbers
-- Automatic creation of `/dev/char_device`
-- Kernel-space buffer for storing data
-- Safe data transfer using `copy_to_user` and `copy_from_user`
-- Basic error handling and logging via `printk`
-
----
-
-## How it works internally
-
-This driver implements a simple character device backed by a fixed-size kernel buffer.
-
-### Device registration
-
-During module initialization, the driver dynamically allocates a device number using `alloc_chrdev_region`. This provides a major and a minor number for the character device.
-
-The driver then initializes a `struct cdev` with the supported file operations and registers it with the kernel using `cdev_add`.
-
-To make the device accessible from user space, the module creates a device class with `class_create` and a device node with `device_create`. This automatically exposes the device as:
-
-```bash
-/dev/char_device
-```
-
-### File operations
-
-The driver provides four basic file operations:
-- `open`: called when the device is opened
-- `read`: called when user space reads from the device
-- `write`: called when the user space writes to the device
-- `release`: called when the device is closed
-
-These operations are registered through the `file_operations` structure.
-
-### Write path
-
-When user space writes to `/dev/char_device`, the kernel calls the driver's `write` function.
-
-The driver copies data from user space into an internal kernel buffer using `copy_from_user`.
-
-The buffer has a fixed size of 1024 bytes. If the input is larger than the available buffer space, only the bytes that fir are stored and the remaining bytes are discarded.
-
-A new write sequence starting at offset `0` clears the previous buffer contents. This means the device stores the latest written content instead of appending new data forever.
-
-### Read path
-
-When user space reads from `/dev/char_device`, the kernel calls the driver's `read` function.
-
-The driver copies data from the internal kernel buffer back to user space using `copy_to_user`.
-
-The read operation respects the file offset. Once the offset reaches the amount of valid data stored in the buffer, the function returns `0`, which signals end-of-file to user-soace programs such as `cat`.
-
-### Cleanup
-
-When the module is removed, the driver destroys the device node, destroys the device class, removes the character device, and releases the allocated device number.
-
-The cleanup happens in the reverse order of initialiation to avoid leaving stale kernel resources behind.
-
----
-
-## Build Instructions
-
-Make sure you have the kernel headers installed.
-
-```bash
+~~~sh
 make
-```
+# Or select headers explicitly:
+make KDIR=/usr/src/linux-headers-YOUR-VERSION
+~~~
 
-This will generate the kernel module:
+The source uses the class_create API provided by Linux 6.4 and newer.
+Build against headers matching the intended kernel.
+W=1 enables extra kernel build warnings. Build products are not distribution
+packages and are not loaded by make.
 
-```bash
-char_device.ko
-```
----
+## Load, use and remove
 
-## Load and Unload Module
-
-### Load the module
-
-```bash
+~~~sh
 sudo insmod char_device.ko
-```
-
-### Check kernel logs
-
-```bash
-sudo dmesg | tail
-```
-
-### Unload the module
-
-```bash
+printf 'hello\n' | sudo tee /dev/char_device
+sudo cat /dev/char_device
 sudo rmmod char_device
-```
+~~~
 
----
+Use the host's module-loading policy. Compilation alone does not verify
+that a module can be loaded, and a kernel module should be tested in a disposable
+development system or VM.
 
-## Device File
+## Integration checks
 
-After loading the module, the device will be available at:
+With this demonstration module already loaded:
 
-```bash
-/dev/char_device
-```
+~~~sh
+sudo python3 tests/check_device.py
+~~~
 
----
-
-## Usage
-
-### Write to the device
-
-```bash
-echo "hello" | sudo tee /dev/char_device
-```
-
-### Read from the device
-
-```bash
-sudo cat /dev/char_device
-```
-
----
-
-## Example
-
-```bash
-echo "abcdef" | sudo tee /dev/char_device > /dev/null
-sudo cat /dev/char_device
-```
-
-Output:
-
-```text
-abcdef
-```
-
----
-
-## Buffer Behavior
-
-- The driver uses a fixed-size buffer of 1024 bytes.
-- Each write operation overwrites the previous content.
-- If more than 1024 bytes are written, the input is truncated.
-
-Example:
-- Input: 1100 bytes
-- Stored: first 1024 bytes
-- Remaining bytes are discarded
-
----
-
-## Limitations
-
-- Single fixed-size buffer (no dynamic allocation)
-- No synchronization (not safe for concurrent access)
-- Write operation does not support append
-- Offset handling is simplified
-- No support for multiple devices
-
----
+The script changes the demo buffer and checks one-byte reads, EOF, empty writes
+and capacity. It never loads or removes a module.
 
 ## License
 
-MIT
-
----
+[MIT](LICENSE).
 
 ## Author
 
-Icaro Ramos Rodrigues dos Santos<br>
-Embedded Systems | Firmware | Arm | STM32 | C | Verilog | UVM | Design Verification<br><br>
+**Icaro Ramos Rodrigues dos Santos**<br>
+Electronic Engineer
 
-GitHub: https://github.com/IcaroRamosDM<br>
-LinkedIn: https://ww.linkedin.com/in/icaro-ramos-r/<br>
-icaroelt@gmail.com
+Embedded Systems | Firmware | C | C++ | Python | Dart | Assembly | Hardware Design | PCB Design | STM32 | ARM Cortex-M | Linux | Windows | RISC-V | Verilog | SystemVerilog | UVM | Design Verification | Instrumentation | Signal Processing | Qt | FLTK
+
+GitHub: [IcaroRamosDM](https://github.com/IcaroRamosDM)<br>
+LinkedIn: [icaro-ramos-r](https://www.linkedin.com/in/icaro-ramos-r/)<br>
+[icaroelt@gmail.com](mailto:icaroelt@gmail.com)
